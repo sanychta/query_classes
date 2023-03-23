@@ -1,7 +1,5 @@
 import tacticenv
-
 import time
-import collections
 import re
 from tactic_server_stub import TACTIC
 from pyasm.search import Search
@@ -9,7 +7,6 @@ from pyasm.security import Batch
 from pyasm.command import Command
 from tactic_server_stub import TacticServerStub
 
-from pprint import pprint
 
 def time_it(start_time=None, message='Code flow running time:'):
     if start_time:
@@ -17,7 +14,6 @@ def time_it(start_time=None, message='Code flow running time:'):
     else:
         return time.time()
     
-# from os.path import basename
 NO_IMAGE = '/assets/no_image.png'
 NO_FILE_NAME = 'no_image.png'
 PROJECT_NAME = 'dolly3d'
@@ -243,6 +239,173 @@ def get_pipeline_process_info(code, search_key=None, project=None):
     return process_info
 
 
+def parse_filter(data):
+
+    fields = data[0].get('field').split('$')
+    values = '&'.join(data[0].get('value')).split('|')
+    out = []
+    code_list = []
+    field = 'code|AND'
+    op = 'in'
+
+    if len(fields) == 3:
+        value_for_durations = values[2].split('&')
+        if value_for_durations.count('') > 0:
+            value_for_durations.remove('')
+
+        values_proc = "|".join(values[0].split('&'))
+        values_stat = "|".join(values[1].split('&'))
+        Batch('dolly3d')
+        s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}']"
+                               f"['status', 'in', '{values_stat}'].complex/scenes)")
+
+        for result in s_object:
+            code_list.append(result.get_code())
+
+        out.append({"field": field, "operator": op, "value": code_list})
+        out.append(
+            {"field": fields[2], "operator": op, "value": value_for_durations})
+    elif len(fields) == 2:
+        if fields[0] == "PROC" and fields[1] == "STAT":
+            values_proc = "|".join(values[0].split('&'))
+            values_stat = "|".join(values[1].split('&'))
+            Batch('dolly3d')
+            s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}']"
+                                   f"['status', 'in', '{values_stat}'].complex/scenes)")
+            for result in s_object:
+                code_list.append(result.get_code())
+            out.append({"field": field, "operator": op, "value": code_list})
+        elif fields[0] == "PROC" and fields[1] != "STAT":
+            value_for_durations = values[1].split('&')
+            if value_for_durations.count('') > 0:
+                value_for_durations.remove('')
+            values_proc = "|".join(values[0].split('&'))
+            Batch('dolly3d')
+            s_object = Search.eval(
+                f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}'].complex/scenes)")
+            for result in s_object:
+                code_list.append(result.get_code())
+            out.append({"field": field, "operator": op, "value": code_list})
+            out.append(
+                {"field": fields[1], "operator": op, "value": value_for_durations})
+        elif fields[0] == "STAT" and fields[1] != "PROC":
+            value_for_durations = values[1].split('&')
+            if value_for_durations.count('') > 0:
+                value_for_durations.remove('')
+            values_stat = "|".join(values[0].split('&'))
+            Batch('dolly3d')
+            s_object = Search.eval(
+                f"@SOBJECT(sthpw/task['status', 'in', '{values_stat}'].complex/scenes)")
+            for result in s_object:
+                code_list.append(result.get_code())
+            out.append({"field": field, "operator": op, "value": code_list})
+            out.append(
+                {"field": fields[1], "operator": op, "value": value_for_durations})
+    elif len(fields) == 1:
+        if fields[0] == "PROC":
+            values_proc = "|".join(values[0].split('&'))
+            Batch('dolly3d')
+            s_object = Search.eval(
+                f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}'].complex/scenes)")
+            for result in s_object:
+                code_list.append(result.get_code())
+            out.append({"field": field, "operator": op, "value": code_list})
+        else:
+            values_stat = "|".join(values[0].split('&'))
+            Batch('dolly3d')
+            s_object = Search.eval(
+                f"@SOBJECT(sthpw/task['status', 'in', '{values_stat}'].complex/scenes)")
+            for result in s_object:
+                code_list.append(result.get_code())
+            out.append({"field": field, "operator": op, "value": code_list})
+
+    return out
+
+
+def add_assets_in_scenes(scene_code):
+    Batch('dolly3d')
+    assets = Search.eval(
+        f"@SOBJECT(dolly3d/assets_in_scenes['scenes_code', '=', '{scene_code}'])")
+    if assets == []:
+        return '0/0'
+    assets_code = []
+    for asset in assets:
+        assets_code.append(asset.get('assets_code'))
+    assets_code = list(set(assets_code))
+    code = "|".join(assets_code)
+    complete_assets = Search.eval(
+        f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
+
+    return f'{len(complete_assets)}/{len(assets_code)}'
+
+
+def get_assets_per_scenes(episodes_dict, episodes_codes):
+
+    server = TACTIC.get()
+    server.set_project('dolly3d')
+    assets = server.eval(
+        "@SOBJECT(dolly3d/assets_in_scenes['scenes_code', 'in', '{0}'])".format('|'.join(episodes_codes)))
+
+    if assets == []:
+        for episode in episodes_dict:
+            code = episode.get('code')
+            episode['assets'] = '0/0'
+        return episodes_dict
+
+    assets_per_episodes_all = {}
+    for episode in episodes_codes:
+        for asset in assets:
+            if episode == asset['scenes_code']:
+                assets_per_episodes_all.setdefault(
+                    episode, set()).add(asset.get('assets_code'))
+            else:
+                assets_per_episodes_all.setdefault(episode, set())
+
+    assets_code = []
+    for asset in assets:
+        assets_code.append(asset.get('assets_code'))
+    code = "|".join(assets_code)
+    complete_assets = server.eval(
+        f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
+
+    assets_per_episode = {}
+    for episode in episodes_codes:
+        for complete_asset in complete_assets:
+            for asset in assets:
+                if asset['assets_code'] == complete_asset['search_code']:
+                    if episode == asset['scenes_code']:
+                        assets_per_episode.setdefault(episode, set()).add(
+                            complete_asset.get('search_code'))
+                    else:
+                        assets_per_episode.setdefault(episode, set())
+
+    for episode in episodes_dict:
+        code = episode.get('code')
+        episode['assets'] = f'{len(assets_per_episode[code])}/{len(assets_per_episodes_all[code])}'
+
+    return episodes_dict
+
+
+def search_links(description):
+    urls = re.compile(
+        r"((https?):((//)|(\\\\))+[\w\d:#@%/;!$()~_?\+-=\\\.&]*)", re.MULTILINE | re.UNICODE)
+    if re.search(urls.pattern, description):
+        value = urls.sub(r'|\1', description)
+        return value.split('|')
+    else:
+        return description
+
+
+def parse_descriptions(data):
+    if isinstance(data, list):
+        for rec in data:
+            if rec.get('description'):
+                rec['description'] = search_links(rec.get('description'))
+    else:
+        if data.get('description'):
+            data['description'] = search_links(data['description'])
+
+
 class CreateQuery(Command):
 
     def __init__(self, resource, args):
@@ -414,160 +577,6 @@ class UpdateManyQuery(Command):
         result = server.update_multiple(data=data)
 
         return {'data': result}
-
-
-def parse_filter(data):
-
-    fields = data[0].get('field').split('$')
-    values = '&'.join(data[0].get('value')).split('|')
-    out = []
-    code_list = []
-    field = 'code|AND'
-    op = 'in'
-
-    if len(fields) == 3:
-        value_for_durations = values[2].split('&')
-        if value_for_durations.count('') > 0:
-            value_for_durations.remove('')
-
-        values_proc = "|".join(values[0].split('&'))
-        values_stat = "|".join(values[1].split('&'))
-        Batch('dolly3d')
-        s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}']"
-                               f"['status', 'in', '{values_stat}'].complex/scenes)")
-
-        for result in s_object:
-            code_list.append(result.get_code())
-
-        out.append({"field": field, "operator": op, "value": code_list})
-        out.append({"field": fields[2], "operator": op, "value": value_for_durations})
-    elif len(fields) == 2:
-        if fields[0] == "PROC" and fields[1] == "STAT":
-            values_proc = "|".join(values[0].split('&'))
-            values_stat = "|".join(values[1].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}']"
-                                   f"['status', 'in', '{values_stat}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-        elif fields[0] == "PROC" and fields[1] != "STAT":
-            value_for_durations = values[1].split('&')
-            if value_for_durations.count('') > 0:
-                value_for_durations.remove('')
-            values_proc = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-            out.append({"field": fields[1], "operator": op, "value": value_for_durations})
-        elif fields[0] == "STAT" and fields[1] != "PROC":
-            value_for_durations = values[1].split('&')
-            if value_for_durations.count('') > 0:
-                value_for_durations.remove('')
-            values_stat = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(f"@SOBJECT(sthpw/task['status', 'in', '{values_stat}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-            out.append({"field": fields[1], "operator": op, "value": value_for_durations})
-    elif len(fields) == 1:
-        if fields[0] == "PROC":
-            values_proc = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-        else:
-            values_stat = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(f"@SOBJECT(sthpw/task['status', 'in', '{values_stat}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-
-    return out
-
-
-def add_assets_in_scenes(scene_code):
-    Batch('dolly3d')
-    assets = Search.eval(f"@SOBJECT(dolly3d/assets_in_scenes['scenes_code', '=', '{scene_code}'])")
-    if assets == []:
-        return '0/0'
-    assets_code = []
-    for asset in assets:
-        assets_code.append(asset.get('assets_code'))
-    assets_code = list(set(assets_code))
-    code = "|".join(assets_code)
-    complete_assets = Search.eval(f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
-
-    return f'{len(complete_assets)}/{len(assets_code)}'
-
-
-def get_assets_per_scenes(episodes_dict, episodes_codes):
-    
-    server = TACTIC.get()
-    server.set_project('dolly3d')
-    assets = server.eval("@SOBJECT(dolly3d/assets_in_scenes['scenes_code', 'in', '{0}'])".format('|'.join(episodes_codes)))
-    
-    if assets==[]:
-        for episode in episodes_dict:
-            code = episode.get('code')
-            episode['assets'] = '0/0'
-        return episodes_dict
-
-    assets_per_episodes_all = {}
-    for episode in episodes_codes:
-        for asset in assets:
-            if episode == asset['scenes_code']:
-                assets_per_episodes_all.setdefault(episode, set()).add(asset.get('assets_code'))
-            else:
-                assets_per_episodes_all.setdefault(episode, set())
-
-    assets_code = []
-    for asset in assets:
-        assets_code.append(asset.get('assets_code'))
-    code = "|".join(assets_code)
-    complete_assets = server.eval(f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
-
-    assets_per_episode = {}
-    for episode in episodes_codes:
-        for complete_asset in complete_assets:
-            for asset in assets:
-                if asset['assets_code'] == complete_asset['search_code']:
-                    if episode == asset['scenes_code']:
-                        assets_per_episode.setdefault(episode, set()).add(complete_asset.get('search_code'))
-                    else:
-                        assets_per_episode.setdefault(episode, set())
-
-    for episode in episodes_dict:
-        code = episode.get('code')
-        episode['assets'] = f'{len(assets_per_episode[code])}/{len(assets_per_episodes_all[code])}'
-
-    return episodes_dict
-
-
-
-def search_links(description):
-    urls = re.compile(r"((https?):((//)|(\\\\))+[\w\d:#@%/;!$()~_?\+-=\\\.&]*)", re.MULTILINE | re.UNICODE)
-    if re.search(urls.pattern, description):
-        value = urls.sub(r'|\1', description)
-        return value.split('|')
-    else:
-        return description
-
-
-def parse_descriptions(data):
-    if isinstance(data, list):
-        for rec in data:
-            if rec.get('description'):
-                rec['description'] = search_links(rec.get('description'))
-    else:
-        if data.get('description'):
-            data['description'] = search_links(data['description'])
 
 
 class GetListQuery(Command):
