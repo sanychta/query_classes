@@ -611,3 +611,5 @@ pyasm/widget/web_attr.py
 pyasm/widget/web_wdg.py
 pyasm/widget/widget_config_test.py
 pyasm/widget/widget_config.py
+__pycache__/__init__.cpython-310.pyc
+__pycache__/query_classes.cpython-310.pyc
