@@ -405,6 +405,15 @@ def parse_descriptions(data):
         if data.get('description'):
             data['description'] = search_links(data['description'])
 
+def parse_keywords(data):
+    if isinstance(data, list):
+        for rec in data:
+            if rec.get('keywords'):
+                rec['keywords'] = re.split(',|;| |\n',rec.get('keywords'))
+    else:
+        if data.get('keywords'):
+            data['keywords'] = list(filter(None, re.split(',|;| |\n', data.get('keywords'))))
+
 
 class CreateQuery(Command):
 
@@ -793,6 +802,7 @@ class GetOneQuery(Command):
         result['image'] = get_file_url(result['__search_key__'], result['code'])
 
         parse_descriptions(result)
+        parse_keywords(result)
 
         return {'data': result}
 
