@@ -1,11 +1,11 @@
 import tacticenv
 import time
-import re
 from tactic_server_stub import TACTIC
 from pyasm.search import Search
 from pyasm.security import Batch
 from pyasm.command import Command
 from tactic_server_stub import TacticServerStub
+from collections import OrderedDict
 
 
 def time_it(start_time=None, message='Code flow running time:'):
@@ -40,7 +40,8 @@ RESOURCE = {
     },
     'tasks': {
         'resource': 'sthpw/task',
-        'project': PROJECT_NAME
+        'project': ''
+        # 'project': PROJECT_NAME
     },
     'scenes': {
         'resource': 'complex/scenes',
@@ -56,7 +57,8 @@ RESOURCE = {
     }
 }
 
-def match_resource(resource):
+
+def match_resource(resource_name):
     """Function matching resources of URL of data provider with tactic search types
 
     :param
@@ -67,75 +69,56 @@ def match_resource(resource):
             project - project name.
     """
 
-    if resource[-1] == "/":
-        resource = resource.replace('/', '')
+    resource_name = resource_name.rstrip('/')
 
-    if resource in RESOURCE:
-        r, p = RESOURCE.get(resource).values()
+    if resource_name in RESOURCE:
+        r, p = RESOURCE.get(resource_name).values()
         return {'search_type': r, 'project': p}
     else:
-        return {'search_type': resource, 'project': ''}
+        return {'search_type': resource_name, 'project': ''}
 
 
 def get_file_url(s_type, s_code):
     """
-    A function that returns the file name and url of the file
-
-    :param s_type:
-        contains search_type
-
-    :param s_code:
-        contains search_code
-
-    :return:
-        url of file and file name
-
+    This function takes two parameters, s_type and s_code, and returns a dictionary containing the url and name of a file.
+    
+    Parameters:
+    s_type (str): The type of search to be performed.
+    s_code (str): The code of the file to be searched for.
+    
+    Returns:
+    dict: A dictionary containing the url and name of the file.
     """
-    file_url = NO_IMAGE
-    file_name = NO_FILE_NAME
-    server = TACTIC.get()
+    # Split the s_type parameter into two parts
     splitted = s_type.split('&')
-    if len(splitted) > 1:
-        search_type = splitted[0]
-    else:
-        search_type = splitted[0].split('?')[0]
-    filters = [('search_type', search_type), ('search_code', s_code)]
-    s_object = server.query_snapshots(filters=filters, include_files=True, include_web_paths_dict=True)
+    
+    # If the length of the splitted list is 1, get the first element of the list and split it by '?'
+    # Otherwise, get the first element of the list
+    search_type = splitted[0].split('?')[0] if len(splitted) == 1 else splitted[0]
+
+    # Query the TACTIC object for the file with the given search type and code
+    s_object = TACTIC.get().query_snapshots(filters=[('search_type', search_type), ('search_code', s_code)], include_files=True, include_web_paths_dict=True)
+
+    # If the object exists
     if s_object:
-        to_dict = s_object[0]
-        if to_dict.get('__web_paths_dict__'):
-            web_paths_dict = to_dict.get('__web_paths_dict__')
-            if web_paths_dict.get('web'):
-                if len(web_paths_dict.get('web')) > 0:
-                    file_url = web_paths_dict.get('web')[0]
-                    file_name = web_paths_dict.get('web')[0].split('/')[-1]
-                else:
-                    file_url = NO_IMAGE
-                    file_name = NO_FILE_NAME
-    return {'url': file_url, 'name': file_name}
+        # Get the web paths dictionary
+        web_paths_dict = s_object[0].get('__web_paths_dict__', {}).get('web', [])
+        # If the dictionary exists
+        if web_paths_dict:
+            # Return a dictionary containing the url and name of the file
+            return {'url': web_paths_dict[0], 'name': web_paths_dict[0].split('/')[-1]}
+    # If the object does not exist, return a dictionary containing the default url and name
+    return {'url': NO_IMAGE, 'name': NO_FILE_NAME}
+
 
 def get_images_urls(episodes_dict, search_keys):
 
-    filters = {}
-    for search_key in search_keys:
-        if search_key.find('&') != -1:
-            search_type, code = search_key.split('&')
-        else:
-            search_type, code = search_key.split('?')
-
-        code = code.split('=')
-        assert len(code) == 2
-        code = code[1]
-        
-        filters.setdefault(search_type, []).append(code)
-
-    for filter in filters:
-        search_type = filter
-        search_codes = filters.get(filter)
+    for s_type, s_code in search_keys.items():
+        search_type = s_type
+        search_codes = s_code
     filters = [('search_type', search_type), ('search_code', 'in', search_codes), ('is_latest', True), ('process', 'not in', ['render', 'cache'])]
 
-    server = TACTIC.get()
-    s_objects = server.query_snapshots(filters=filters, include_web_paths_dict=True)
+    s_objects = TACTIC.get().query_snapshots(filters=filters, include_web_paths_dict=True)
 
     images_data = {}
     for code in search_codes:
@@ -167,46 +150,11 @@ def get_images_urls(episodes_dict, search_keys):
 
 
 def get_duration():
-
-    server = TacticServerStub()
-    server.set_project('dolly3d')
-
+    server = TACTIC.get()
+    server.set_project(PROJECT_NAME)
     result = server.get_config_definition('complex/scenes', 'edit_definition', 'duration')
-    result = result[result.find('<values>') + 8:result.find('</values>')]
-    result = result.split('|')
-
-    out = []
-    for item in result:
-        out.append({'duration': item})
-    result = {
-        'data': out,
-        'total': len(out)
-    }
-    return result
-
-
-def get_pipeline(project=None, args=None, mode=None):
-    """
-        project: name of project
-        args: List of Dict {field, [values]}
-        mode: 'or' or 'and' search mode
-    """
-    server = TacticServerStub()
-    server.set_project(project)
-
-    if args:
-        search_list = []
-        for arg in args:
-            for field, value in arg.items():
-                if isinstance(value, list):
-                    value = '|'.join(value)
-                search_list.append(f"['{field}', 'in', '{value}']")
-        search_string = "".join(search_list)
-        if mode:
-            search_string += f"['{mode}']"
-        return server.eval(f"@SOBJECT(sthpw/pipeline{search_string})")
-    else:
-        return server.eval("@SOBJECT(sthpw/pipeline)")
+    out = [{'duration': item} for item in result[result.find('<values>') + 8:result.find('</values>')].split('|')]
+    return {'data': out, 'total': len(out)}
 
 
 def get_pipeline_process_info(code, search_key=None, project=None):
@@ -215,170 +163,166 @@ def get_pipeline_process_info(code, search_key=None, project=None):
 
     Batch(project)
 
-    if code is None or code == 'undefined':
-        return []
+    if code is None or code == 'undefined': return []
 
-    process_info = []
     if isinstance(code, list):
-        code = '|'.join(code)
-        expr = f"@SOBJECT(sthpw/pipeline['code', 'in', '{code}'])"
+        expr = f"@SOBJECT(sthpw/pipeline['code', 'in', '{'|'.join(code)}'])"
     else:
         expr = f"@SOBJECT(sthpw/pipeline['code', '{code}'])"
 
     pipe_object = Search.eval(expr)
-    results = []
-    if len(pipe_object) != 0:
-        for item in pipe_object:
-            for sub_item in item.get_processes():
-                results.append(sub_item)
-    else:
-        return None
-    if len(results) != 0:
-        for item in results:
-            process_info.append(item.get_attributes())
-    return process_info
+    return [sub_item.get_attributes() for item in pipe_object for sub_item in item.get_processes()]
 
 
-def parse_filter(data):
+def get_code_list(search_string, project=None):
+    Batch(project)
+    return [result.get_code() for result in Search.eval(search_string)] if search_string else []
 
-    fields = data[0].get('field').split('$')
-    values = '&'.join(data[0].get('value')).split('|')
-    out = []
-    code_list = []
-    field = 'code|AND'
-    op = 'in'
+def fill_filter_fields(field, operator, value):
+    return {
+        "field": field,
+        "operator": operator,
+        "value": value
+    }
 
-    if len(fields) == 3:
-        value_for_durations = values[2].split('&')
-        if value_for_durations.count('') > 0:
-            value_for_durations.remove('')
+OPERATOR_IN = 'in'
+FILTER_FIELD_CODE = 'code|AND'
 
-        values_proc = "|".join(values[0].split('&'))
-        values_stat = "|".join(values[1].split('&'))
-        Batch('dolly3d')
-        s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}']"
-                               f"['status', 'in', '{values_stat}'].complex/scenes)")
+def parse_filter(input_data):
+    
+    field_list = input_data.get('field').split('$')
+    values = '&'.join(input_data.get('value')).split('|')
+    new_filter_fields = []
 
-        for result in s_object:
-            code_list.append(result.get_code())
+    match len(field_list):
+        case 3:
+            duration_values = list(filter(None, values[2].split('&')))
+            process_values = "|".join(values[0].split('&'))
+            status_values = "|".join(values[1].split('&'))
+            
+            new_filter_fields.extend([
+                fill_filter_fields(
+                    FILTER_FIELD_CODE,
+                    OPERATOR_IN,
+                    get_code_list(f"@SOBJECT(sthpw/task['process', 'in', '{process_values}']['status', 'in', '{status_values}'].complex/scenes)", PROJECT_NAME)),
+                fill_filter_fields(field_list[2], OPERATOR_IN, duration_values)
+            ])
+        
+        case 2:
+            duration_values = list(filter(None, values[1].split('&')))
 
-        out.append({"field": field, "operator": op, "value": code_list})
-        out.append(
-            {"field": fields[2], "operator": op, "value": value_for_durations})
-    elif len(fields) == 2:
-        if fields[0] == "PROC" and fields[1] == "STAT":
-            values_proc = "|".join(values[0].split('&'))
-            values_stat = "|".join(values[1].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}']"
-                                   f"['status', 'in', '{values_stat}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-        elif fields[0] == "PROC" and fields[1] != "STAT":
-            value_for_durations = values[1].split('&')
-            if value_for_durations.count('') > 0:
-                value_for_durations.remove('')
-            values_proc = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(
-                f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-            out.append(
-                {"field": fields[1], "operator": op, "value": value_for_durations})
-        elif fields[0] == "STAT" and fields[1] != "PROC":
-            value_for_durations = values[1].split('&')
-            if value_for_durations.count('') > 0:
-                value_for_durations.remove('')
-            values_stat = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(
-                f"@SOBJECT(sthpw/task['status', 'in', '{values_stat}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-            out.append(
-                {"field": fields[1], "operator": op, "value": value_for_durations})
-    elif len(fields) == 1:
-        if fields[0] == "PROC":
-            values_proc = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(
-                f"@SOBJECT(sthpw/task['process', 'in', '{values_proc}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
-        else:
-            values_stat = "|".join(values[0].split('&'))
-            Batch('dolly3d')
-            s_object = Search.eval(
-                f"@SOBJECT(sthpw/task['status', 'in', '{values_stat}'].complex/scenes)")
-            for result in s_object:
-                code_list.append(result.get_code())
-            out.append({"field": field, "operator": op, "value": code_list})
+            if field_list[0] == "PROC" and field_list[1] == "STAT":
+                process_values = "|".join(values[0].split('&'))
+                status_values = "|".join(values[1].split('&'))
+                
+                new_filter_fields.extend([fill_filter_fields(
+                    FILTER_FIELD_CODE,
+                    OPERATOR_IN,
+                    get_code_list(f"@SOBJECT(sthpw/task['process', 'in', '{process_values}']['status', 'in', '{status_values}'].complex/scenes)", PROJECT_NAME)
+                )])
+            elif field_list[0] == "PROC" and field_list[1] != "STAT":
+                process_values = "|".join(values[0].split('&'))
+               
+                new_filter_fields.extend([
+                    fill_filter_fields(
+                        FILTER_FIELD_CODE,
+                        OPERATOR_IN,
+                        get_code_list(f"@SOBJECT(sthpw/task['process', 'in', '{process_values}'].complex/scenes)", PROJECT_NAME)),
+                    fill_filter_fields(field_list[1], OPERATOR_IN, duration_values)
+                ])
+            elif field_list[0] == "STAT" and field_list[1] != "PROC":
+                status_values = "|".join(values[0].split('&'))
+                
+                new_filter_fields.extend([
+                    fill_filter_fields(
+                        FILTER_FIELD_CODE,
+                        OPERATOR_IN,
+                        get_code_list(f"@SOBJECT(sthpw/task['status', 'in', '{status_values}'].complex/scenes)", PROJECT_NAME)),
+                    fill_filter_fields(field_list[1], OPERATOR_IN, duration_values)
+                ])
+        
+        case 1:
+            if field_list[0] == "PROC":
+                process_values = "|".join(values[0].split('&'))
+                
+                new_filter_fields.extend([
+                    fill_filter_fields(
+                        FILTER_FIELD_CODE,
+                        OPERATOR_IN,
+                        get_code_list(f"@SOBJECT(sthpw/task['process', 'in', '{process_values}'].complex/scenes)", PROJECT_NAME))
+                ])
+            else:
+                status_values = "|".join(values[0].split('&'))
+                
+                new_filter_fields.extend([
+                    fill_filter_fields(
+                        FILTER_FIELD_CODE,
+                        OPERATOR_IN,
+                        get_code_list(f"@SOBJECT(sthpw/task['status', 'in', '{status_values}'].complex/scenes)", PROJECT_NAME))
+                ])
 
-    return out
+    return new_filter_fields
 
 
 def add_assets_in_scenes(scene_code):
-    Batch('dolly3d')
-    assets = Search.eval(
-        f"@SOBJECT(dolly3d/assets_in_scenes['scenes_code', '=', '{scene_code}'])")
-    if assets == []:
-        return '0/0'
-    assets_code = []
-    for asset in assets:
-        assets_code.append(asset.get('assets_code'))
-    assets_code = list(set(assets_code))
-    code = "|".join(assets_code)
-    complete_assets = Search.eval(
-        f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
+    Batch(PROJECT_NAME)
+    assets = Search.eval(f"@SOBJECT(dolly3d/assets_in_scenes['scenes_code', '=', '{scene_code}'])")
+
+    if not assets: return '0/0'
+
+    assets_code = list(set(asset.get('assets_code') for asset in assets))
+    complete_assets = Search.eval(f"@SOBJECT(sthpw/task['search_code', 'in', '{'|'.join(assets_code)}']['status', 'in', 'Опубликован|publish'])")
 
     return f'{len(complete_assets)}/{len(assets_code)}'
 
 
 def get_assets_per_scenes(episodes_dict, episodes_codes):
+    """
+    This function takes two parameters: episodes_dict and episodes_codes.
+    It returns a dictionary with the number of assets per episode.
 
+    Parameters:
+    episodes_dict (dict): A dictionary containing the episodes.
+    episodes_codes (list): A list of episode codes.
+
+    Returns:
+    dict: A dictionary with the number of assets per episode.
+    """
+
+    # Connect to the TACTIC server
     server = TACTIC.get()
-    server.set_project('dolly3d')
-    assets = server.eval(
-        "@SOBJECT(dolly3d/assets_in_scenes['scenes_code', 'in', '{0}'])".format('|'.join(episodes_codes)))
+    server.set_project(PROJECT_NAME)
 
+    # Get all assets in the given episodes
+    assets = server.eval(f"@SOBJECT(dolly3d/assets_in_scenes['scenes_code', 'in', '{'|'.join(episodes_codes)}'])")
+
+    # If there are no assets, return the episodes dict with 0/0 assets
     if assets == []:
         for episode in episodes_dict:
-            code = episode.get('code')
             episode['assets'] = '0/0'
         return episodes_dict
 
+    # Get a list of all assets in the given episodes
     assets_per_episodes_all = {}
     for episode in episodes_codes:
         for asset in assets:
             if episode == asset['scenes_code']:
-                assets_per_episodes_all.setdefault(
-                    episode, set()).add(asset.get('assets_code'))
+                assets_per_episodes_all.setdefault(episode, set()).add(asset.get('assets_code'))
             else:
                 assets_per_episodes_all.setdefault(episode, set())
 
-    assets_code = []
-    for asset in assets:
-        assets_code.append(asset.get('assets_code'))
-    code = "|".join(assets_code)
-    complete_assets = server.eval(
-        f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
-
+    # Get a list of all published assets in the given episodes
+    code = "|".join(asset.get('assets_code') for asset in assets)
+    complete_assets = server.eval(f"@SOBJECT(sthpw/task['search_code', 'in', '{code}']['status', 'in', 'Опубликован|publish'])")
     assets_per_episode = {}
     for episode in episodes_codes:
         for complete_asset in complete_assets:
             for asset in assets:
                 if asset['assets_code'] == complete_asset['search_code']:
-                    if episode == asset['scenes_code']:
-                        assets_per_episode.setdefault(episode, set()).add(
-                            complete_asset.get('search_code'))
-                    else:
-                        assets_per_episode.setdefault(episode, set())
+                    if episode == asset['scenes_code']: assets_per_episode.setdefault(episode, set()).add(complete_asset.get('search_code'))
+                    else: assets_per_episode.setdefault(episode, set())
 
+    # Add the number of assets to the episodes dict
     for episode in episodes_dict:
         code = episode.get('code')
         episode['assets'] = f'{len(assets_per_episode[code])}/{len(assets_per_episodes_all[code])}'
@@ -386,24 +330,36 @@ def get_assets_per_scenes(episodes_dict, episodes_codes):
     return episodes_dict
 
 
-def search_links(description):
-    urls = re.compile(
-        r"((https?):((//)|(\\\\))+[\w\d:#@%/;!$()~_?\+-=\\\.&]*)", re.MULTILINE | re.UNICODE)
-    if re.search(urls.pattern, description):
-        value = urls.sub(r'|\1', description)
-        return value.split('|')
+import re
+URL_PATTERN = re.compile(r"(?P<url>https?://[\w\d:#@%/;!$()~_?\+-=\\\.&]*[\w\d/#@%=_])", re.MULTILINE | re.UNICODE)
+
+def search_links(description, pattern=URL_PATTERN):
+    """
+    This function searches for links in a given string.
+    
+    Parameters:
+    description (str): The string to search for links in.
+    
+    Returns:
+    list: A list of links found in the string.
+    """
+    if not isinstance(description, str):
+        raise TypeError("Input parameter must be a string")
+    
+    if not description:
+        return []
+    
+    if re.search(pattern.pattern, description):
+        return pattern.sub(r'|\1', description).split('|')
     else:
         return description
-
 
 def parse_descriptions(data):
     if isinstance(data, list):
         for rec in data:
-            if rec.get('description'):
-                rec['description'] = search_links(rec.get('description'))
+            rec['description'] = search_links(rec.get('description')) if rec.get('description') else None
     else:
-        if data.get('description'):
-            data['description'] = search_links(data['description'])
+        data['description'] = search_links(data['description']) if data.get('description') else None
 
 def parse_keywords(data):
     if isinstance(data, list):
@@ -589,7 +545,9 @@ class UpdateManyQuery(Command):
 
 
 class GetListQuery(Command):
-
+    """
+    This class is used to get a list of resources from the database.
+    """
     def __init__(self,
                  resource,
                  filters,
@@ -598,11 +556,14 @@ class GetListQuery(Command):
                  order_bys={'order_bys': 'id', 'ord_direction': 'asc'}
                  ):
         """
-        :param resource: string
-        :param filters: dict
-        :param limit: integer
-        :param offset: integer
-        :param order_bys: dict
+        Initializes the GetListQuery class.
+
+        Parameters:
+            resource (str): The resource to be retrieved.
+            filters (dict): The filters to be applied to the query.
+            limit (int): The maximum number of results to return.
+            offset (int): The offset of the results to return.
+            order_bys (dict): The order by clause to be applied to the query.
         """
         super(GetListQuery, self).__init__()
         self.limit = limit
@@ -613,61 +574,65 @@ class GetListQuery(Command):
         self.resource = resource
 
     @staticmethod
-    def get_filter(data):
+    def parse_filter_data(data):
+
         """
-        data: list
+        Parse and filter data from a given list.
+
+        Args:
+            data (list): A list of dictionaries containing the data to be filtered.
+
+        Returns:
+            list: A list of dictionaries containing the filtered data.
+
         """
-        out = []
+
+        filter_list = []
         if len(data) > 0:
             if data[0].get('field') == 'assets_category_code|AND':
                 data.reverse()
 
-            t_data = []
-            counter = 0
-            for f in data:
-                if f.get('field').find('PROC') >=0 or f.get('field').find('STAT') >= 0:
-                    t_data = parse_filter([f])
-                    data.pop(counter)
-                counter+=1
-            for t in t_data:
-                data.append(t)
+            temp_data = []
+            for index, record in enumerate(data):
+                if record.get('field').find('PROC') >= 0 or record.get('field').find('STAT') >= 0:
+                    temp_data = parse_filter(record)
+                    data.pop(index)
+            data.extend(temp_data)
 
             if data:
-                for rec in data:
-                    oper = rec.get('operator')
-                    values = rec.get('value')
+                for record in data:
+                    operator = record.get('operator')
+                    values = record.get('value')
 
-                    if values == [None]:
-                        return None
+                    if values == [None]: return None
 
-                    fields = rec.get('field').split('|')
-                    if oper in ['contains', 'startswith', 'startsWith', 'starts with',
-                                'starts With', 'endswith', 'endsWith', 'ends with', 'ends With']:
-                        oper = 'EQI'
-                    elif oper == 'null':
-                        oper = '='
-                        values = None
-                    elif oper == 'nnull':
-                        oper = '!='
-                        values = ''
-                    elif oper == ['isAnyOf', 'in']:
-                        oper = 'in'
-                    elif oper == 'eq':
-                        oper = '='
+                    fields = record.get('field').split('|')
+                    if operator in ['contains', 'startswith', 'startsWith', 'starts with', 'starts With', 'endswith', 'endsWith', 'ends with', 'ends With']:
+                        operator = 'EQI'
+                    elif operator == 'null': operator, values = '=', None
+                    elif operator == 'nnull': operator, values = '!=', ''
+                    elif operator == ['isAnyOf', 'in']: operator = 'in'
+                    elif operator == 'eq': operator = '='
 
                     for field in fields:
                         if field == '' or field is None:
                             pass
                         else:
                             if field == 'AND':
-                                out[-1]['method'] = 'and'
+                                filter_list[-1]['method'] = 'and'
                             else:
-                                out.append({'field': field, 'value': values, 'op': oper, 'method': 'or'})
-                return out
+                                filter_list.append({'field': field, 'value': values, 'op': operator, 'method': 'or'})
+                return filter_list
             else:
                 return None
 
     def execute(self):
+        """
+        Executes the GetListQuery command.
+
+        Returns:
+            dict: A dictionary containing the data and total number of results.
+        """
         main_time = time_it()
         resource = match_resource(self.resource)
 
@@ -675,14 +640,10 @@ class GetListQuery(Command):
             if len(self.filters) > 0:
                 code = self.filters[0].get('value')
             else:
-                result = {'data': 0,
-                          'total': 0}
-                return result
+                return {'data': 0,'total': 0}
 
-            data = get_pipeline_process_info(code=code, project='dolly3d')
-            result = {'data': data,
-                      'total': len(data)}
-            return result
+            data = get_pipeline_process_info(code=code, project=PROJECT_NAME)
+            return {'data': data,'total': len(data)}
 
         if resource['search_type'] == 'durations':
             return get_duration()
@@ -691,7 +652,7 @@ class GetListQuery(Command):
         Batch(resource['project'])
         s_object = Search(resource['search_type'])
 
-        s_filter = self.get_filter(self.filters)
+        s_filter = self.parse_filter_data(self.filters)
 
         if s_filter is not None:
 
@@ -716,35 +677,18 @@ class GetListQuery(Command):
         if self.limit != 0:
             s_object.set_limit(self.limit)
             s_object.set_offset(self.offset)
-        s_result = s_object.get_sobjects()
+        search_results = s_object.get_sobjects()
         
-        episodes_codes = []
-        output = []
-        search_keys = []
+        search_keys = {resource['search_type'] + ('?project=' + resource['project'] if resource.get('project') else ''):
+               [res.get_sobject_dict().get('__search_key__').split('=')[-1] for res in search_results] }
+        episodes_codes = [result.get_code() for result in search_results if resource['search_type'] == 'complex/scenes']
+        output = [result.get_sobject_dict() for result in search_results]
 
-        for result in s_result:
-            out_dict = result.get_sobject_dict()
-
-            if out_dict.get('__search_key__'):
-                search_keys.append(out_dict.get('__search_key__'))
-
-            if resource['search_type'] == 'complex/scenes':
-                episodes_codes.append(result.get_code())
-            output.append(out_dict)
-        
         if search_keys:
             output = get_images_urls(output, search_keys)
 
         if resource['search_type'] == 'complex/scenes':
             output = get_assets_per_scenes(output, episodes_codes)
-
-        # unique_els = []
-        # for dict_item in output:
-        #     if dict_item not in unique_els:
-        #         unique_els.append(dict_item)
-        # output = unique_els
-
-        # parse_descriptions(output)
 
         result = {'data': output,
                   'total': count}
@@ -891,7 +835,6 @@ class CheckUploadedFile(Command):
         self.data = data
 
     def execute(self):
-        print(f'DATA:\n{self.data}\n')
         search_type = self.data.get('search_type')
         file = self.data.get('file_path').split('\n')[0]
         resource = match_resource(search_type)
@@ -918,7 +861,7 @@ class CheckUploadedFile(Command):
 
         filters = [('code', result.get('code'))]
         s_object = server.query_snapshots(filters=filters, include_files=True, include_web_paths_dict=True)
-        print(f'\n{s_object}\n')
+
         if s_object:
             data = s_object[0]
         else:
